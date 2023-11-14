@@ -1,0 +1,49 @@
+{
+  "id": "vicartt",
+  "title": "VicarTT",
+  "description": "VicarTT adds integration with Vicar app allowing rolling dices through Vicar directly.",
+  "version": "#{VERSION}#",
+  "library": "false",
+  "manifestPlusVersion": "1.2.0",
+  "compatibility": {
+    "minimum": 10,
+    "verified": 10,
+    "maximum": 11
+  },
+  "authors": [
+    {
+      "name": "VicarTeam",
+      "url": "https://github.com/VicarTeam"
+    }
+  ],
+  "relationships": {
+    "systems": [],
+    "requires": []
+  },
+  "esmodules": [
+    "scripts/module.js"
+  ],
+  "scripts": [
+  ],
+  "styles": [
+    "styles/module.css"
+  ],
+  "languages": [
+    {
+      "lang": "en",
+      "name": "English",
+      "path": "languages/en.json"
+    }
+  ],
+  "url": "#{URL}#",
+  "manifest": "#{MANIFEST}#",
+  "download": "#{DOWNLOAD}#",
+  "license": "LICENSE",
+  "readme": "README.md",
+  "media": [
+    {
+      "type": "icon",
+      "url": "https://avatars.githubusercontent.com/u/105825665?s=200&v=4"
+    }
+  ]
+}
