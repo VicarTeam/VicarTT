@@ -36,7 +36,7 @@ Hooks.once('init', async function() {
       console.log('VicarTT: Integration enabled: ', value);
       if (value) {
         console.log('VicarTT: Connecting to VicarTT...');
-        const defaultUrl = localStorage.getItem('vicartt-url') || '';
+        const defaultUrl = localStorage.getItem('vicartt-url') || 'https://vicar.nauri.io';
         const defaultHash = localStorage.getItem('vicartt-hash') || generateRandomHash();
 
         const dialog = new Dialog({
