@@ -26,14 +26,6 @@
   "scripts": [
   ],
   "styles": [
-    "styles/module.css"
-  ],
-  "languages": [
-    {
-      "lang": "en",
-      "name": "English",
-      "path": "languages/en.json"
-    }
   ],
   "url": "#{URL}#",
   "manifest": "#{MANIFEST}#",
