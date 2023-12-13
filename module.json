@@ -26,7 +26,6 @@
   "scripts": [
   ],
   "styles": [
-    "styles.css"
   ],
   "url": "#{URL}#",
   "manifest": "#{MANIFEST}#",
