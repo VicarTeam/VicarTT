@@ -258,3 +258,130 @@ class VampiricDiceRoller {
     return diceTexts.join(' + ');
   }
 }
+
+function parseIntWithFallback(str, fallback) {
+  const value = parseInt(str);
+  if (isNaN(value)) {
+    return fallback;
+  }
+  return value;
+}
+
+function calculateDicePool(normal, hunger) {
+  const hungerDices = Math.min(hunger, normal);
+  const normalDices = Math.max(0, normal - hungerDices);
+  return {
+    normalDices,
+    hungerDices
+  };
+}
+
+function errorMessage(chatLog, message) {
+  ui.notifications.error(message);
+}
+
+// /vc <normal_dice> (<difficulty>=1) (<hunger_value>=0)
+function _processCommandVC(chatLog, args) {
+  const normal = parseInt(args[0]);
+  if (isNaN(normal) || normal <= 0) {
+    errorMessage(chatLog, 'Normal dice count must be greater than 0. /vc [normal_dice[ ([difficulty]=1) ([hunger_value]=0)');
+    return;
+  }
+
+  const difficulty = parseIntWithFallback(args[1], 1);
+  const hunger = parseIntWithFallback(args[2], 0);
+  const {normalDices, hungerDices} = calculateDicePool(normal, hunger);
+
+  _processInternalDiceRolling(normalDices, hungerDices, difficulty);
+}
+
+// /vch <normal_dice> <hunger_dice> (<difficulty>=1)
+function _processCommandVCH(chatLog, args) {
+  const normalDices = parseInt(args[0]);
+  if (isNaN(normalDices) || normalDices <= 0) {
+    errorMessage(chatLog, 'Normal dice count must be greater than 0. /vch [normal_dice] [hunger_dice] ([difficulty]=1)');
+    return;
+  }
+
+  const hungerDices = parseInt(args[1]);
+  if (isNaN(hungerDices)) {
+    errorMessage(chatLog, 'Hunger dice is required. /vch [normal_dice] [hunger_dice] ([difficulty]=1)');
+    return;
+  }
+
+  const difficulty = parseIntWithFallback(args[2], 1);
+
+  _processInternalDiceRolling(normalDices, hungerDices, difficulty);
+}
+
+// /vcui
+function _processCommandVCUI(chatLog) {
+  const dialog = new Dialog({
+    title: 'VicarTT Dice Roller',
+    content: `<p>Normal Dices: <input id="vicartt-dr-normal" type="number" min="1" step="1" value="1"/></p><p>Hunger: <input id="vicartt-dr-hunger" type="number" min="0" max="5" step="1" value="0"/></p><p>Difficulty: <input id="vicartt-dr-diff" type="number" min="0" step="1" value="1"/></p>`,
+    buttons: {
+      ok: {
+        icon: '<i class="fas fa-check"></i>',
+        label: 'Roll',
+        callback: () => {
+          const normal = parseInt(document.getElementById('vicartt-dr-normal').value);
+          if (isNaN(normal) || normal <= 0) {
+            errorMessage(chatLog, 'Normal dice count must be greater than 0.');
+            return;
+          }
+
+          const hunger = parseIntWithFallback(document.getElementById('vicartt-dr-hunger').value, 0);
+          const difficulty = parseIntWithFallback(document.getElementById('vicartt-dr-diff').value, 1);
+          const {normalDices, hungerDices} = calculateDicePool(normal, hunger);
+
+          _processInternalDiceRolling(normalDices, hungerDices, difficulty);
+        }
+      },
+      cancel: {
+        icon: '<i class="fas fa-times"></i>',
+        label: 'Cancel'
+      }
+    }
+  });
+  dialog.render(true);
+}
+
+function _processInternalDiceRolling(normalDices, hungerDices, difficulty) {
+  const vampire = {name: '', avatar: ''};
+
+  if (game.user.character) {
+    vampire.name = game.user.character.name;
+    vampire.avatar = game.user.character.img;
+  } else if (game.user.isGM) {
+    vampire.name = 'Storyteller';
+    vampire.avatar = game.user.avatar;
+  } else {
+    vampire.name = game.user.name;
+    vampire.avatar = "icons/svg/mystery-man.svg";
+  }
+
+  const data = {
+    username: game.user.name,
+    vampire,
+    roll: {normalDices, hungerDices, difficulty}
+  };
+
+  VampiricDiceRoller.roll(data);
+}
+
+Hooks.on('chatMessage', (chatLog, message, chatData) => {
+  const trimmed = message.trim();
+  const commands = {
+    "/vc": _processCommandVC,
+    "/vch": _processCommandVCH,
+    "/vcui": _processCommandVCUI
+  };
+
+  const parts = trimmed.split(' ');
+  const command = parts[0];
+  const args = parts.slice(1);
+  if (commands[command]) {
+    commands[command](chatLog, args);
+    return false;
+  }
+});
