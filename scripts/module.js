@@ -1,4 +1,4 @@
-let relayClient = undefined;
+let lastRoll = undefined;
 
 const ROLL_OUTCOME = {
   CRITICAL_SUCCESS: ['Critical Success', '#469B48'],
@@ -8,129 +8,11 @@ const ROLL_OUTCOME = {
   BESTIAL_FAILURE: ['Bestial Failure', 'darkred']
 };
 
-function generateRandomHash() {
-  const uuidv4 = () => {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-      const r = Math.random() * 16 | 0;
-      const v = c === 'x' ? r : (r & 0x3 | 0x8);
-      return v.toString(16);
-    });
-  }
-
-  const id1 = uuidv4().replace(/-/g, '');
-  const id2 = Date.now().toString(16);
-  const id3 = Math.floor(Math.random() * 1000000000).toString(16);
-  const hash = `${id3}${id1}${id2}`;
-  return hash.split('').sort(() => Math.random() - 0.5).join('');
-}
-
-Hooks.once('init', async function() {
-  game.settings.register('vicartt', 'isIntegrationEnabled', {
-    name: 'Enable Integration',
-    hint: 'Enable the VicarTT integration',
-    scope: 'client',
-    config: true,
-    type: Boolean,
-    default: false,
-    onChange: value => {
-      console.log('VicarTT: Integration enabled: ', value);
-      if (value) {
-        console.log('VicarTT: Connecting to VicarTT...');
-        const defaultUrl = localStorage.getItem('vicartt-url') || 'https://vicar.nauri.io';
-        const defaultHash = localStorage.getItem('vicartt-hash') || generateRandomHash();
-
-        const dialog = new Dialog({
-          title: 'VicarTT Integration',
-          content: `<p>Enter the URL for your VicarTT instance and copy&paste the FoundryVTT VicarTT ID into Vicar.</p><p>URL: <input id="vicartt-url" type="text" value="${defaultUrl}"/></p><p>FoundryVTT VicarTT ID: <input id="vicartt-hash" type="text" value="${defaultHash}"/></p>`,
-          buttons: {
-            ok: {
-              icon: '<i class="fas fa-check"></i>',
-              label: 'OK',
-              callback: () => {
-                const url = document.getElementById('vicartt-url').value;
-                const hash = document.getElementById('vicartt-hash').value;
-                localStorage.setItem('vicartt-url', url);
-                localStorage.setItem('vicartt-hash', hash);
-                relayClient = new RelayClient();
-                relayClient.connect();
-              }
-            },
-            cancel: {
-              icon: '<i class="fas fa-times"></i>',
-              label: 'Cancel'
-            }
-          }
-        });
-        dialog.render(true);
-      } else {
-        if (relayClient) {
-          relayClient.stop();
-          relayClient = undefined;
-        }
-      }
-    }
-  });
-
-  const isIntegrationEnabled = game.settings.get('vicartt', 'isIntegrationEnabled');
-  if (isIntegrationEnabled) {
-    console.log('VicarTT: Connecting to VicarTT...');
-    relayClient = new RelayClient();
-    relayClient.connect();
-  }
-});
-
-class RelayClient {
-  constructor() {
-    this._stopped = false;
-    this._url = localStorage.getItem('vicartt-url');
-    this._hash = localStorage.getItem('vicartt-hash');
-    this._source = undefined;
-    this._sourceReconnectController = undefined;
-
-    if (this._url.endsWith('/')) {
-      this._url = this._url.slice(0, -1);
-    }
-  }
-
-  connect() {
-    if (this._sourceReconnectController) {
-      clearInterval(this._sourceReconnectController);
-    }
-
-    if (this._stopped) {
-      return;
-    }
-
-    this._source = new EventSource(`${this._url}/vicartt/stream?accessKey=${this._hash}`);
-    this._source.onmessage = this.#onMessage.bind(this);
-    this._source.onerror = this.#onError.bind(this);
-    this._sourceReconnectController = setInterval(this.#checkConnection.bind(this), 5000);
-  }
-
-  stop() {
-    this._stopped = true;
-    this._source.close();
-    clearInterval(this._sourceReconnectController);
-  }
-
-  #onMessage(event) {
-    const data = JSON.parse(event.data);
-    VampiricDiceRoller.roll(data);
-  }
-
-  #onError(event) {
-    console.warn('VicarTT: Connection error: ', event);
-  }
-
-  #checkConnection() {
-    if (this._source.readyState === 2) {
-      this.connect();
-    }
-  }
-}
-
 class VampiricDiceRoller {
   static async roll(data) {
+    lastRoll = undefined;
+
+    const isRerollable = data.roll.normalDices > 0;
     const roll = new Roll(this.#formatRollText(data.roll));
     await roll.evaluate({
       async: true
@@ -168,6 +50,8 @@ class VampiricDiceRoller {
     let totalFailures = 0;
     let hungerCriticals = 0;
     let hungerFailures = 0;
+    const normals = [];
+    const hungers = [];
 
     const handleDicePart = (section) => {
       const formula = section.querySelector('span.part-formula');
@@ -196,6 +80,12 @@ class VampiricDiceRoller {
             hungerFailures++;
           }
         }
+
+        if (isHunger) {
+          hungers.push(value);
+        } else {
+          normals.push(value);
+        }
       });
 
       totalSuccesses += successes;
@@ -221,6 +111,177 @@ class VampiricDiceRoller {
 
     const diceResult = messageContent.querySelector('div.dice-result');
     diceResult.innerHTML += `<h4 class="dice-total" style="color: ${outcome[1]};">${(outcome[0] + difficultyText)}</h4>`;
+
+    if (isRerollable) {
+      lastRoll = {
+        msgId: msg.id,
+        data,
+        roll,
+        result: {
+          normals,
+          hungers,
+        }
+      };
+    }
+
+    await msg.update({
+      content: messageContent.innerHTML
+    });
+  }
+
+  static async reroll(oldRoll, rerollDiceIndexes) {
+    const roll = new Roll(`${rerollDiceIndexes.length}dv`);
+    await roll.evaluate({
+      async: true
+    });
+
+    const msg = await roll.toMessage();
+    const html = await msg.getHTML();
+    const messageElement = html.get(0);
+    const messageContent = messageElement.querySelector('div.message-content');
+
+    let usernameElement = ``;
+    if (oldRoll.data.username && oldRoll.data.username !== '') {
+      usernameElement = `<i style="font-size: 0.8rem">${oldRoll.data.username}</i>`;
+    }
+
+    if (oldRoll.data.vampire.avatar && oldRoll.data.vampire.avatar !== '') {
+      messageContent.innerHTML = `<div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; margin-top: 0.3rem"><img src="${oldRoll.data.vampire.avatar}" style="width: 3rem; height: 3rem"><div style="display: flex; flex-direction: column; align-items: center; justify-content: flex-start"><span style="font-size: 1.1rem; font-weight: bold; width: 100%; text-align: left">${oldRoll.data.vampire.name}</span>${usernameElement}</div></div>` + messageContent.innerHTML;
+    } else {
+      messageContent.innerHTML = `<div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; margin-top: 0.3rem"><div style="display: flex; flex-direction: column; align-items: center; justify-content: flex-start"><span style="font-size: 1.1rem; font-weight: bold; width: 100%; text-align: left">${oldRoll.data.vampire.name}</span>${usernameElement}</div></div>` + messageContent.innerHTML;
+    }
+
+    const forumla = 'Willpower Reroll: ' + (oldRoll.result.normals.filter((_, idx) => rerollDiceIndexes.includes(idx)).join(', '));
+    const filteredNormals = oldRoll.result.normals.filter((_, idx) => !rerollDiceIndexes.includes(idx));
+    const rerolledNormals = roll.terms[0].results.map(dice => dice.result);
+
+    let totalSuccesses = 0;
+    let totalCriticals = 0;
+    let totalFailures = 0;
+    let hungerCriticals = 0;
+    let hungerFailures = 0;
+    let normalSuccesses = 0;
+    let hungerSuccesses = 0;
+    let sumHunger = 0;
+    let sumNormal = 0;
+
+    const normals = filteredNormals.concat(rerolledNormals);
+    const hungers = oldRoll.result.hungers;
+
+    normals.forEach(dice => {
+      if (dice >= 6) {
+        totalSuccesses++;
+        normalSuccesses++;
+      }
+      if (dice === 10) {
+        totalCriticals++;
+      } else if (dice === 1) {
+        totalFailures++;
+      }
+
+      sumNormal += dice;
+    });
+
+    hungers.forEach(dice => {
+      if (dice >= 6) {
+        totalSuccesses++;
+        hungerSuccesses++;
+      }
+      if (dice === 10) {
+        totalCriticals++;
+        hungerCriticals++;
+      } else if (dice === 1) {
+        totalFailures++;
+        hungerFailures++;
+      }
+
+      sumHunger += dice;
+    });
+
+    if (totalCriticals >= 2) {
+      const pairs = Math.floor(totalCriticals / 2);
+      totalSuccesses += pairs * 2;
+    }
+
+    const sum = sumNormal + sumHunger;
+    const outcome = this.#analyzeRollOutcome(totalSuccesses, totalCriticals, totalFailures, hungerCriticals, hungerFailures, oldRoll.data.roll.difficulty || 1);
+    const difficultyText = oldRoll.data.roll.difficulty ? ` (vs. ${oldRoll.data.roll.difficulty})` : '';
+
+    const diceResultDiv = messageContent.querySelector('div.dice-result');
+    diceResultDiv.innerHTML = '<div class="dice-formula">' + forumla + '</div>';
+
+    if (normals.length > 0) {
+      let code = `
+      <div class="dice-tooltip" style="display: none">
+        <section class="tooltip-part">
+          <div class="dice">
+            <header class="part-header flexrow"><span class="part-formula">Normal Dice</span><span class="part-total">${normalSuccesses} (${sumNormal})</span></header>
+            <ol class="dice-rolls">
+      `;
+
+      filteredNormals.forEach(dice => {
+        const classes = ["roll", "vampiredie", "d10"];
+        if (dice === 10) {
+          classes.push("max");
+        } else if (dice === 1) {
+          classes.push("min");
+        }
+
+        code += `<li class="${classes.join(' ')}">${dice}</li>`;
+      });
+      rerolledNormals.forEach(dice => {
+        const classes = ["roll", "vampiredie", "d10"];
+        if (dice === 10) {
+          classes.push("max");
+        } else if (dice === 1) {
+          classes.push("min");
+        }
+
+        code += `<li class="${classes.join(' ')}" style="color: #9e0ace; filter: none">${dice}</li>`;
+      });
+
+      code += `</li></ol></div></section></div>`;
+
+      diceResultDiv.innerHTML += code;
+    }
+
+    if (hungers.length > 0) {
+      let code = `
+      <div class="dice-tooltip" style="display: none">
+        <section class="tooltip-part">
+          <div class="dice">
+            <header class="part-header flexrow"><span class="part-formula">Hunger Dice</span><span class="part-total">${hungerSuccesses} (${sumHunger})</span></header>
+            <ol class="dice-rolls">
+      `;
+
+      hungers.forEach(dice => {
+        const classes = ["roll", "vampiredie", "d10"];
+        if (dice === 10) {
+          classes.push("max");
+        } else if (dice === 1) {
+          classes.push("min");
+        }
+
+        code += `<li class="${classes.join(' ')}">${dice}</li>`;
+      });
+
+      code += `</li></ol></div></section></div>`;
+
+      diceResultDiv.innerHTML += code;
+    }
+
+    diceResultDiv.innerHTML += `<h4 class="dice-total">${totalSuccesses} (${sum})</h4>`;
+    diceResultDiv.innerHTML += `<h4 class="dice-total" style="color: ${outcome[1]};">${(outcome[0] + difficultyText)}</h4>`;
+
+    lastRoll = {
+      msgId: msg.id,
+      data: oldRoll.data,
+      roll,
+      result: {
+        normals,
+        hungers,
+      }
+    };
 
     await msg.update({
       content: messageContent.innerHTML
@@ -369,12 +430,92 @@ function _processInternalDiceRolling(normalDices, hungerDices, difficulty) {
   VampiricDiceRoller.roll(data);
 }
 
+function _processCommandVCReroll(chatLog) {
+  if (!lastRoll) {
+    errorMessage(chatLog, 'No roll to reroll.');
+    return;
+  }
+
+  window.vicartt_current_reroll_dices = [];
+  window.vicartt_toggle_reroll = function (index) {
+    const selectedIndex = window.vicartt_current_reroll_dices.indexOf(index);
+    if (selectedIndex === -1) {
+      if (window.vicartt_current_reroll_dices.length >= 3) {
+        return;
+      }
+
+      window.vicartt_current_reroll_dices.push(index);
+
+      const div = document.getElementById(`vicartt-reroll-dialog--dice-${index}`);
+      if (div) {
+        div.style.fontWeight = 'bold';
+        div.style.color = '#6d0091';
+        div.style.backgroundColor = '#d077ed';
+        div.style.borderColor = '#6d0091';
+      }
+    } else {
+      window.vicartt_current_reroll_dices.splice(selectedIndex, 1);
+
+      const div = document.getElementById(`vicartt-reroll-dialog--dice-${index}`);
+      if (div) {
+        div.style.fontWeight = '';
+        div.style.color = 'black';
+        div.style.backgroundColor = 'transparent';
+        div.style.borderColor = 'black';
+      }
+    }
+
+    const left = document.getElementById('vicartt-reroll-dialog--left');
+    if (left) {
+      left.innerText = 3 - window.vicartt_current_reroll_dices.length;
+    }
+  }
+
+  let code = `
+  <div id="vicartt-reroll-dialog" style="display: flex; flex-direction: column">
+  <b>Selected dices for reroll (<span id="vicartt-reroll-dialog--left">3</span> left):</b>
+  <div style="display: flex; flex-direction: row; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.5rem">
+`;
+
+  lastRoll.result.normals.forEach((dice, index) => {
+    code += `<div id="vicartt-reroll-dialog--dice-${index}" style="cursor: pointer; width: 2rem; height: 2rem; display: flex; align-items: center; justify-content: center; border-radius: 0.5rem; border: 1px solid black; background-color: transparent; font-weight: normal; color: black" onclick="window.vicartt_toggle_reroll(${index})">${dice}</div>`;
+  });
+
+  code += `</div></div>`;
+
+  const dialog = new Dialog({
+    title: 'VicarTT Willpower Reroll',
+    content: code,
+    buttons: {
+      ok: {
+        icon: '<i class="fas fa-check"></i>',
+        label: 'Reroll',
+        callback: () => {
+          if (window.vicartt_current_reroll_dices.length === 0) {
+            errorMessage(chatLog, 'No dices selected for reroll.');
+            return;
+          }
+
+          VampiricDiceRoller.reroll(lastRoll, window.vicartt_current_reroll_dices);
+          window.vicartt_current_reroll_dices = [];
+        }
+      },
+      cancel: {
+        icon: '<i class="fas fa-times"></i>',
+        label: 'Cancel'
+      }
+    }
+  });
+  dialog.render(true);
+}
+
 Hooks.on('chatMessage', (chatLog, message, chatData) => {
   const trimmed = message.trim();
   const commands = {
     "/vc": _processCommandVC,
     "/vch": _processCommandVCH,
-    "/vcui": _processCommandVCUI
+    "/vcui": _processCommandVCUI,
+    "/vcrr": _processCommandVCReroll
   };
 
   const parts = trimmed.split(' ');

@@ -2,9 +2,8 @@
   "id": "vicartt",
   "title": "VicarTT",
   "description": "VicarTT adds integration with Vicar app allowing rolling dices through Vicar directly.",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "library": "false",
-  "manifestPlusVersion": "1.2.0",
   "compatibility": {
     "minimum": 10,
     "verified": 10,
